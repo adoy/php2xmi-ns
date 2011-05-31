@@ -1,4 +1,4 @@
-#!/usr/bin/php -qC
+#!/usr/local/bin/php -qC
 <?php
 /* vim: set expandtab tabstop=4 shiftwidth=4: */
 //  
@@ -79,6 +79,7 @@ class XmiWriter
         $this->_showPrivate = true;
         $this->_showProtected = true;
         $this->_buffer = '';
+        $this->_nsResolver = null;
     }
 
     public function writeData()
@@ -95,6 +96,11 @@ class XmiWriter
     public function enableProtected($bool)
     {
         $this->_showProtected = $bool;
+    }
+
+    public function setNSResolver($nsr)
+    {
+        $this->_nsResolver = $nsr;
     }
 
     public function acceptPrivate()
@@ -279,7 +285,7 @@ class XmiWriter
 
     public static function extractMemberTypeFromComment($comment)
     {
-        if (preg_match('/@type\s+(\S+)/', $comment, $m)){
+        if (preg_match('/@(?:type|var)\s+(\S+)/', $comment, $m)){
             return $m[1];
         }
         return 'mixed';
@@ -303,6 +309,7 @@ class XmiWriter
     private $_xmiId;
     private $_classIds;
     private $_types;
+    private $_nsResolver;
 }
 
 class XmiPackage
@@ -486,9 +493,12 @@ class XmiClassWriter
         else  {           
             $type = 'mixed'; // damn it
         }
-        $id = $this->getTypeId($type);
 
-        $this->writeData('<UML:Attribute visibility="',$this->getVisibility($property),'" xmi.id="',$this->nextXmiId(),'" value="" type="',htmlspecialchars($type),'" name="',htmlspecialchars($property->getName()),'"');
+        $type = $this->_writer->_nsResolver->getFullyQualifiedClassName($this->_class->name, $type);
+        $id = $this->getTypeId($type);
+        
+
+        $this->writeData('<UML:Attribute visibility="',$this->getVisibility($property),'" xmi.id="',$this->nextXmiId(),'" value="" type="',$id,'" name="',htmlspecialchars($property->getName()),'"');
         if ($property->isStatic()) $this->writeData(' ownerScope="classifier"');
         $this->writeData('/>', "\n");
     }
@@ -511,8 +521,10 @@ class XmiClassWriter
         }
 
         $type = XmiWriter::extractReturnTypeFromComment($method->getDocComment());
+        $type = $this->_writer->_nsResolver->getFullyQualifiedClassName($this->_class->name, $type);
+
         $id = $this->getTypeId($type);
-        $this->writeData('<UML:Operation visibility="',$this->getVisibility($method),'" xmi.id="',$this->nextXmiId(),'" type="',htmlspecialchars($type),'" name="',$method->getName(),'"');
+        $this->writeData('<UML:Operation visibility="',$this->getVisibility($method),'" xmi.id="',$this->nextXmiId(),'" type="',$id,'" name="',$method->getName(),'"');
         if ($method->isAbstract()) $this->writeData(' isAbstract="true"');
         if ($method->isStatic()) $this->writeData(' ownerScope="classifier"');
         $this->writeData('>', "\n");
@@ -531,8 +543,7 @@ class XmiClassWriter
         // $param->getDefaultValue() sometimes makes php crash this it is
         // deactivated until PHP reflection is fixed
         // function foo($var=self::CONST_VALUE);
-        // $default = $param->isOptional() ? $param->getDefaultValue() : '';
-        $default = '';
+        $default = $param->isOptional() ? $param->getDefaultValue() : '';
         try {
             $paramClass = $param->getClass();
         }
@@ -545,9 +556,10 @@ class XmiClassWriter
         }
         else {
             $type = XmiWriter::extractParamTypeFromComment($method->getDocComment(), $param->getName());
+            $type = $this->_writer->_nsResolver->getFullyQualifiedClassName($this->_class->name, $type);
         }
         $id = $this->getTypeId($type);
-        $this->writeData('<UML:Parameter visibility="public" xmi.id="',$this->nextXmiId(),'" value="',htmlspecialchars($default),'" type="',htmlspecialchars($type),'" name="',htmlspecialchars($param->getName()),'"/>', "\n");
+        $this->writeData('<UML:Parameter visibility="public" xmi.id="',$this->nextXmiId(),'" value="',htmlspecialchars($default),'" type="',$id,'" name="',htmlspecialchars($param->getName()),'"/>', "\n");
     }
 
     protected $_writer;
@@ -601,6 +613,110 @@ class XmiClassImplements
     private $_interfaceName;
 }
 
+
+class XmiNameSpaceResolver
+{
+    private $classes = array();
+
+    public function addFile($file)
+    {
+        $tokens = token_get_all(file_get_contents($file));
+        $count = count($tokens);
+
+        $classes = array();
+        $namespace = null;
+        $aliases = array();
+        for ($i = 0 ; $i < $count ; $i++)
+        {
+            $token = $tokens[$i];
+            if ($token[0] === T_USE)
+            {
+                $status = 0;
+                $name = '';
+                $alias = '';
+                do {
+                    $token = $tokens[++$i];
+                    switch($token[0])
+                    {
+                        case T_WHITESPACE:
+                            break;
+                        case T_AS:
+                            $status = 1;
+                            break;
+                        case T_NS_SEPARATOR:
+                        case T_STRING:
+                            if (0 === $status) {
+                                $name .= $token[1];
+                            } else {
+                                $alias .= $token[1];
+                            }
+                            break;
+                        case ',':
+                        case ';':
+                            if (!$alias) {
+                                $arr = explode('\\', $name);
+                                $alias = array_pop($arr);
+                            }
+                            $aliases[$alias] = $name;
+                            $status = 0;
+                            $alias = '';
+                            $name = '';
+                            break;
+                    }
+
+                } while($token[0] != ';');
+            } elseif($token[0] == T_NAMESPACE) {
+                $namespace = '';
+                do {
+                    $token = $tokens[++$i];
+                    switch($token[0])
+                    {
+                        case T_NS_SEPARATOR:
+                        case T_STRING:
+                            $namespace .= $token[1];
+                    }
+                } while($token[0] != ';');
+            } elseif($token[0] == T_INTERFACE || $token[0] == T_CLASS) {
+                $class = '';
+                do {
+                    $token = $tokens[++$i];
+                    switch($token[0])
+                    {
+                        case T_WHITESPACE:
+                            break;
+                        case T_NS_SEPARATOR:
+                        case T_STRING:
+                            $classes[] = $token[1];
+                            break 2;
+                    }
+                } while($token[0] != ';');
+            }
+        }
+        foreach ($classes as $class)
+        {
+            if ($namespace)
+            {
+                $class = $namespace . '\\' . $class;
+            }
+            $this->classes[$class] = array('namespace' => $namespace, 'use' => $aliases);
+        }
+    }
+
+    public function getClassInfo($class)
+    {
+        return $this->classes[$class];
+    }
+
+    public function getFullyQualifiedClassName($context, $classname)
+    {
+        if (isset($this->classes[$context]['use'][$classname])) {
+            return $this->classes[$context]['use'][$classname];
+        } elseif (isset($this->classes[$context]['namespace'])) {
+            return $this->classes[$context]['namespace'] . '\\' . $classname;
+        }
+        return $classname;
+    }
+}
 
 function xmi2php_requireDirectory($path)
 {
@@ -686,6 +802,7 @@ function php2xmi_main($argv)
         xmi2php_usage();
         exit(0);
     }
+    $nsr = new XmiNameSpaceResolver();
     foreach ($files as $file){
         if (is_dir($file)){
             if ($recusive){
@@ -701,11 +818,16 @@ function php2xmi_main($argv)
             require_once $file;
         }
     }
+    foreach (get_included_files() as $file)
+    {
+        $nsr->addFile($file);
+    }
 
 
     $writer = new XmiWriter();
     $writer->enablePrivate($showPrivates);
     $writer->enableProtected($showProtecteds);
+    $writer->setNSResolver($nsr);
     $allclasses = array_merge(get_declared_classes(), get_declared_interfaces());
     $userclasses = array_diff($allclasses, $builtinClasses);
     foreach ($userclasses as $className){
@@ -721,4 +843,3 @@ function php2xmi_main($argv)
     }
 }
 
-?>
