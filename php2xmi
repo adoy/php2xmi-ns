@@ -1,0 +1,724 @@
+#!/usr/bin/php -qC
+<?php
+/* vim: set expandtab tabstop=4 shiftwidth=4: */
+//  
+//  Copyright (c) 2004-2005 Laurent Bedubourg
+//  
+//  This library is free software; you can redistribute it and/or
+//  modify it under the terms of the GNU Lesser General Public
+//  License as published by the Free Software Foundation; either
+//  version 2.1 of the License, or (at your option) any later version.
+//  
+//  This library is distributed in the hope that it will be useful,
+//  but WITHOUT ANY WARRANTY; without even the implied warranty of
+//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+//  Lesser General Public License for more details.
+//  
+//  You should have received a copy of the GNU Lesser General Public
+//  License along with this library; if not, write to the Free Software
+//  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+//  
+//  Authors: Laurent Bedubourg <lbedubourg@motion-twin.com>
+//  
+
+
+/* invoque script main() */
+php2xmi_main($argv);
+
+function xmi2php_usage()
+{
+    echo <<<EOUSAGE
+
+PHP2XMI 0.1.2 - (c)2005 Motion-Twin
+
+    Usage: php2xmi [Options] <PHP FILES AND DIRECTORIES>
+
+Options:
+    --path=<php include path>   php include path required by your php files
+    --no-private                do not output private methods and attributes
+    --no-protected              do not output protected methods and attributes
+    --strict                    activate E_STRICT error_reporting
+    --help                      shows this help
+    --recursive                 look for .php files in specified directories
+    --output=<output.xmi>       select xmi output file
+
+Examples:
+
+    Create an XMI representation of a PHP file content
+
+        php2xmi --output=result.xmi MyFile.php
+
+    Create an XMI representation of all PHP files residing in 
+    /home/user/websize/lib and dump them to stdout
+
+        php2xmi \
+        --path=/home/user/website/lib \
+        --no-private \
+        --recursive \
+        /home/user/website/lib
+
+EOUSAGE;
+}
+
+class XmiWriter
+{
+    const ID_MYSTEREO  = 4;
+    const ID_DATATYPE  = 5;
+    const ID_INTERFACE = 6;
+    const ID_START     = 7;
+
+    public function __construct()
+    {
+        $this->_xmiId = self::ID_START;
+        $this->_packages = array();
+        $this->_classes = array();
+        $this->_classIds = array();
+        $this->_types = array();
+        $this->_extends = array();
+        $this->_implements = array();
+        $this->_showPrivate = true;
+        $this->_showProtected = true;
+        $this->_buffer = '';
+    }
+
+    public function writeData()
+    {
+        $args = func_get_args();
+        $this->_buffer .= implode('', $args);
+    }
+
+    public function enablePrivate($bool)
+    {
+        $this->_showPrivate = $bool;
+    }
+
+    public function enableProtected($bool)
+    {
+        $this->_showProtected = $bool;
+    }
+
+    public function acceptPrivate()
+    {
+        return $this->_showPrivate;
+    }
+
+    public function acceptProtected()
+    {
+        return $this->_showProtected;
+    }
+
+    public function addClass($className)
+    {
+        $this->_classes[$className] = null;
+    }
+
+    public function write()
+    {
+        foreach ($this->_classes as $name => $false){
+            $this->prepareClass(new ReflectionClass($name));
+        }
+        $this->writeHead();
+        $this->writeDataTypes();
+        $this->writePackages();
+        $this->writeClasses();
+        foreach ($this->_extends as $ext){
+            $this->writeClassExtends($ext);
+        }
+        foreach ($this->_implements as $ext){
+            $this->writeClassImplements($ext);
+        }
+        $this->writeFoot();
+        return $this->_buffer;
+    }
+
+    private function writeClassExtends(XmiClassExtends $ext)
+    {
+        $this->writeData('<UML:Generalization child="', $this->getTypeId($ext->getChild()),'" visibility="public" xmi.id="',$this->nextXmiId(),'" parent="',$this->getTypeId($ext->getParent()),'" />',"\n");
+    }
+
+    private function writeClassImplements(XmiClassImplements $ext)
+    {
+        $this->writeData('<UML:Generalization child="', $this->getTypeId($ext->getClassName()),'" visibility="public" xmi.id="',$this->nextXmiId(),'" parent="',$this->getTypeId($ext->getInterfaceName()),'" />',"\n");
+    }
+
+    public function nextXmiId()
+    {
+        return ++$this->_xmiId;
+    }
+
+    public function addClassExtends(XmiClassExtends $ext)
+    {
+        $this->_extends[] = $ext;
+    }
+
+    public function addClassImplements(XmiClassImplements $ext)
+    {
+        $this->_implements[] = $ext;
+    }
+
+    private function prepareClass(ReflectionClass $class)
+    {
+        $this->registerClass($class->getName());
+        if ($class->isInterface()){
+            $writer = new XmiInterfaceWriter($this, $class);
+        }
+        else {
+            $writer = new XmiClassWriter($this, $class);
+        }
+        $writer->write();
+        $this->_classes[$class->getName()] = $writer;
+    }
+
+    private function writeClasses()
+    {
+        foreach ($this->_classes as $name => $classWriter){
+            if ($classWriter != null && !$classWriter->isPackaged())
+                $this->writeData($classWriter->getXmi());
+        }
+    }
+
+    private function writeHead()
+    {
+        $this->writeData('<?xml version="1.0" encoding="UTF-8" ?>',"\n");
+        $this->writeData('<XMI xmlns:UML="org.omg/standards/UML" verified="false" timestamp="" xmi.version="1.2">', "\n");
+        $this->writeData('<XMI.header>',"\n");
+        $this->writeData('<XMI.documentation>', "\n");
+        $this->writeData('<XMI.exporter>PHP2XMI</XMI.exporter>', "\n");
+        $this->writeData('<XMI.exporterVersion>1.0</XMI.exporterVersion>',"\n");
+        $this->writeData('<XMI.exporterEncoding>UnicodeUTF8</XMI.exporterEncoding>',"\n");
+        $this->writeData('</XMI.documentation>',"\n");
+        $this->writeData('<XMI.model xmi.name="php2xmi" />',"\n");
+        $this->writeData('<XMI.metamodel xmi.name="UML" href="UML.xml" xmi.version="1.3" />',"\n");
+        $this->writeData('</XMI.header>',"\n");
+        $this->writeData('<XMI.content>',"\n");
+        $this->writeData('<UML:Model>', "\n");
+        $this->writeData('<UML:Namespace.ownedElement>',"\n");
+        $this->writeData('<UML:Stereotype visibility="public" xmi.id="',self::ID_MYSTEREO,'" name="my-stereotype" />',"\n");
+        $this->writeData('<UML:Stereotype visibility="public" xmi.id="',self::ID_DATATYPE,'" name="datatype" />', "\n");
+        $this->writeData('<UML:Stereotype visibility="public" xmi.id="',self::ID_INTERFACE,'" name="interface" />', "\n");
+    }
+
+    private function writePackages()
+    {
+        foreach ($this->_packages as $name => $package){
+            $package->write();
+        }
+    }
+
+    private function writeDataTypes()
+    {
+        foreach ($this->_types as $type => $id){
+            if (!array_key_exists($type, $this->_classIds)){
+                $this->writeDataType($id, $type);
+            }
+        }
+    }
+
+    public function getTypeId($type)
+    {
+        if (!array_key_exists($type, $this->_types))
+            $this->_types[$type] = $this->nextXmiId();
+        return $this->_types[$type];
+    }
+
+    public function getPackage($name)
+    {
+        $parts = explode('.', $name);
+        $rootName = array_shift($parts);
+        if (!array_key_exists($rootName, $this->_packages)){
+            $this->_packages[$rootName] = new XmiPackage($this,$rootName);
+        }
+        $package = $this->_packages[$rootName];
+
+        foreach ($parts as $part){
+            if (!$package->hasPackage($part)){
+                $child = new XmiPackage($this, $part);
+                $package->addPackage($child);
+            }
+            $package = $package->getPackage($part);
+        }
+
+        return $package;
+    }
+
+    private function registerClass($className)
+    {
+        $id = $this->getTypeId($className);
+        $this->_classIds[$className] = $id;
+    }
+
+    private function writeDataType($id, $name)
+    {
+        $this->writeData('<UML:DataType stereotype="',self::ID_DATATYPE,'" visibility="public" xmi.id="',$id,'" name="',htmlspecialchars($name),'"/>',"\n");
+    }
+
+    private function writeFoot()
+    {         
+        $this->writeData('</UML:Namespace.ownedElement>',"\n");
+        $this->writeData('</UML:Model>',"\n");
+        $this->writeData('</XMI.content>',"\n");
+        $this->writeData('</XMI>');
+    }
+
+    public static function extractReturnTypeFromComment($comment)
+    {
+        if (preg_match('/@return\s+(\S+)/', $comment, $m)){
+            return $m[1];
+        }
+        return 'void';
+    }
+
+    public static function extractParamTypeFromComment($comment, $name)
+    {
+        if (preg_match('/@param\s+\$?'.$name.'\s+(\S+)/', $comment, $m))
+            return $m[1];
+        if (preg_match('/@param\s+(\S+)\s+\$?'.$name.'/', $comment, $m))
+            return $m[1];
+        return 'mixed';
+    }
+
+    public static function extractMemberTypeFromComment($comment)
+    {
+        if (preg_match('/@type\s+(\S+)/', $comment, $m)){
+            return $m[1];
+        }
+        return 'mixed';
+    }
+
+    public static function extractPackageNameFromComment($comment)
+    {
+        if (preg_match('/@package\s+(\S+)/', $comment, $m)){
+            return $m[1];
+        }
+        return '';
+    }
+
+    private $_packages;
+    private $_extends;
+    private $_implements;
+    private $_showPrivate;
+    private $_showProtected;
+    private $_buffer;
+    private $_classes;
+    private $_xmiId;
+    private $_classIds;
+    private $_types;
+}
+
+class XmiPackage
+{
+    public function __construct(XmiWriter $writer, $name)
+    {
+        $this->_writer = $writer;
+        $this->_name = $name;
+        $this->_classes = array();
+        $this->_packages = array();
+        $this->_parent = null;
+    }
+
+    public function getName()
+    {
+        if ($this->_parent != null){
+            return $this->_parent->getName().'.'.$this->_name;
+        }
+        return $this->_name;
+    }
+
+    public function addPackage(XmiPackage $package)
+    {
+        $this->_packages[$package->getName()] = $package;
+        $package->_parent = $this;
+    }
+
+    public function hasPackage($name)
+    {
+        return array_key_exists($name, $this->_packages);
+    }
+
+    public function getPackage($name)
+    {
+        return $this->_packages[$name];
+    }
+
+    public function addClass(XmiClassWriter $class)
+    {
+        array_push($this->_classes, $class);
+    }
+
+    public function write()
+    {
+        $this->writeHead();
+        foreach ($this->_packages as $name => $package){
+            $package->write();
+        }
+        foreach ($this->_classes as $class){
+            $this->_writer->writeData($class->getXmi());
+        }
+        $this->writeFoot();
+    }
+
+    private function writeHead()
+    {
+        $this->_writer->writeData('<UML:Package visibility="public" xmi.id="',$this->_writer->nextXmiId(),'" name="package.',htmlspecialchars($this->_name),'">',"\n");
+        $this->_writer->writeData('<UML:Namespace.ownedElement>',"\n");
+    }
+
+    private function writeFoot()
+    {
+        $this->_writer->writeData('</UML:Namespace.ownedElement>',"\n");
+        $this->_writer->writeData('</UML:Package>',"\n");
+    }
+
+    private $_packages;
+    private $_classes;
+    private $_writer;
+    private $_name;
+}
+
+
+class XmiClassWriter 
+{
+    public function __construct(XmiWriter $writer, ReflectionClass $class)
+    {
+        $this->_writer = $writer;
+        $this->_class = $class;
+        $this->_xmi = '';
+        $this->_packaged = false;
+    }
+
+    public function isPackaged(){
+        return $this->_packaged;
+    }
+
+    protected function getId()
+    {
+        return $this->_writer->getTypeId($this->_class->getName());
+    }
+
+    protected function writeData()
+    {
+        $args = func_get_args();
+        $this->_xmi .= implode('', $args);
+    }
+
+    public function write()
+    {
+        $parentClass = $this->_class->getParentClass();
+        if ($parentClass != null){
+            $this->_writer->addClassExtends(new XmiClassExtends($this->_class->getName(), $parentClass->getName()));
+        }
+        foreach ($this->_class->getInterfaces() as $interface){
+            if ($parentClass == null || !$parentClass->implementsInterface($interface->getName())){
+                $this->_writer->addClassImplements(new XmiClassImplements($this->_class->getName(), $interface->getName()));
+            }
+        }
+
+        $packageName = XmiWriter::extractPackageNameFromComment($this->_class->getDocComment());
+        if ($packageName){
+            $package = $this->_writer->getPackage($packageName);
+            $package->addClass($this);
+            $this->_packaged = true;
+        }
+
+        $this->writeHead();
+        $this->writeMembers();
+        $this->writeMethods();
+        $this->writeFoot();
+    }
+
+    public function getXmi()
+    {
+        return $this->_xmi;
+    }
+
+    public function getTypeId($name)
+    {
+        return $this->_writer->getTypeId($name);
+    }
+
+    protected function writeHead()
+    {
+        $this->writeData('<UML:Class visibility="public" xmi.id="',$this->getId(),'" name="',$this->_class->getName(),'"');
+        if ($this->_class->isAbstract()) $this->writeData(' isAbstract="true"');
+        $this->writeData('>', "\n");
+        $this->writeData('<UML:Classifier.feature>',"\n");
+    }
+
+    protected function writeFoot()
+    {
+        $this->writeData('</UML:Classifier.feature>',"\n");
+        $this->writeData('</UML:Class>',"\n");
+    }
+
+    protected function getVisibility(Reflector $o)
+    {
+        if ($o->isPublic()) return 'public';
+        if ($o->isPrivate()) return 'private';
+        if ($o->isProtected()) return 'protected';
+    }
+
+    protected function nextXmiId()
+    {
+        return $this->_writer->nextXmiId();
+    }
+
+    protected function writeMembers()
+    {
+        foreach ($this->_class->getProperties() as $prop){
+            $this->writeProperty($prop);
+        }
+    }
+
+    protected function writeProperty(ReflectionProperty $property)
+    {
+        if (!$this->_writer->acceptPrivate() && $property->isPrivate()) return;
+        if (!$this->_writer->acceptProtected() && $property->isProtected()) return;
+
+        // ignore parent properties
+        if ($property->getDeclaringClass() != $this->_class){
+            return;
+        }
+
+        if (version_compare(phpversion(), '5.1.0', '>=')){
+            // only for PHP 5.1.0 implements ReflectionProperty::getDocComment()
+            $type = XmiWriter::extractMemberTypeFromComment($property->getDocComment());
+        }
+        else  {           
+            $type = 'mixed'; // damn it
+        }
+        $id = $this->getTypeId($type);
+
+        $this->writeData('<UML:Attribute visibility="',$this->getVisibility($property),'" xmi.id="',$this->nextXmiId(),'" value="" type="',htmlspecialchars($type),'" name="',htmlspecialchars($property->getName()),'"');
+        if ($property->isStatic()) $this->writeData(' ownerScope="classifier"');
+        $this->writeData('/>', "\n");
+    }
+
+    protected function writeMethods()
+    {
+        foreach ($this->_class->getMethods() as $method){
+            $this->writeMethod($method);
+        }
+    }
+
+    protected function writeMethod(ReflectionMethod $method)
+    {
+        if (!$this->_writer->acceptPrivate() && $method->isPrivate()) return;
+        if (!$this->_writer->acceptProtected() && $method->isProtected()) return;
+
+        // ignore parent methods
+        if ($method->getDeclaringClass() != $this->_class){
+            return;
+        }
+
+        $type = XmiWriter::extractReturnTypeFromComment($method->getDocComment());
+        $id = $this->getTypeId($type);
+        $this->writeData('<UML:Operation visibility="',$this->getVisibility($method),'" xmi.id="',$this->nextXmiId(),'" type="',htmlspecialchars($type),'" name="',$method->getName(),'"');
+        if ($method->isAbstract()) $this->writeData(' isAbstract="true"');
+        if ($method->isStatic()) $this->writeData(' ownerScope="classifier"');
+        $this->writeData('>', "\n");
+
+        $this->writeData('<UML:BehavioralFeature.parameter>',"\n");
+        foreach ($method->getParameters() as $param){
+            $this->writeMethodParam($method, $param);
+        }
+        $this->writeData('</UML:BehavioralFeature.parameter>',"\n");
+
+        $this->writeData('</UML:Operation>', "\n");
+    }
+
+    protected function writeMethodParam(ReflectionMethod $method, ReflectionParameter $param)
+    {
+        // $param->getDefaultValue() sometimes makes php crash this it is
+        // deactivated until PHP reflection is fixed
+        // function foo($var=self::CONST_VALUE);
+        // $default = $param->isOptional() ? $param->getDefaultValue() : '';
+        $default = '';
+        try {
+            $paramClass = $param->getClass();
+        }
+        catch (ReflectionException $e){
+            // warning ? param class not included
+            $paramClass = null;
+        }
+        if ($paramClass != null){
+            $type = $paramClass->getName();
+        }
+        else {
+            $type = XmiWriter::extractParamTypeFromComment($method->getDocComment(), $param->getName());
+        }
+        $id = $this->getTypeId($type);
+        $this->writeData('<UML:Parameter visibility="public" xmi.id="',$this->nextXmiId(),'" value="',htmlspecialchars($default),'" type="',htmlspecialchars($type),'" name="',htmlspecialchars($param->getName()),'"/>', "\n");
+    }
+
+    protected $_writer;
+    protected $_class;
+    protected $_xmi;
+    protected $_packaged;
+}
+
+class XmiInterfaceWriter extends XmiClassWriter
+{
+    protected function writeHead()
+    {
+        $this->writeData('<UML:Interface visibility="public" xmi.id="',$this->getId(),'" isAbstract="true" name="',htmlspecialchars($this->_class->getName()),'">', "\n");
+        $this->writeData('<UML:Classifier.feature>',"\n");
+    }
+
+    protected function writeFoot()
+    {
+        $this->writeData('</UML:Classifier.feature>',"\n");
+        $this->writeData('</UML:Interface>',"\n");
+    }
+}
+
+class XmiClassExtends 
+{ 
+    public function __construct($className, $otherClassName)
+    {
+        $this->_childName = $className;
+        $this->_parentName = $otherClassName;
+    }
+
+    public function getChild(){ return $this->_childName; }
+    public function getParent(){ return $this->_parentName; }
+
+    private $_childName;
+    private $_parentName;
+}
+
+class XmiClassImplements
+{ 
+    public function __construct($className, $interfaceName)
+    {
+        $this->_className = $className;
+        $this->_interfaceName = $interfaceName;
+    }
+
+    public function getClassName() { return $this->_className; }
+    public function getInterfaceName(){ return $this->_interfaceName; }
+
+    private $_className;
+    private $_interfaceName;
+}
+
+
+function xmi2php_requireDirectory($path)
+{
+    if ($path[ strlen($path)-1 ] != '/') $path .= '/';
+    $dir = dir($path);
+    while ($entry = $dir->read()){
+        if ($entry[0] == '.')
+            continue;
+        $rp = $path.$entry;
+        if (is_file($rp) && substr($entry, -4) == '.php'){
+            require_once $rp;
+        }
+        if (is_dir($rp)){
+            xmi2php_requireDirectory($rp);
+        }
+    }
+    $dir->close();
+}
+
+function php2xmi_main($argv)
+{
+    $files = array();
+    $outputFile = '';
+    $recusive = false;
+    $showPrivates = true;
+    $showProtecteds = true;
+    $builtinClasses = array_merge(get_declared_classes(), get_declared_interfaces());
+
+    array_shift($argv);
+    foreach ($argv as $arg){
+        if ($arg[0] == '-'){
+            if (preg_match('/^(.*?)=(.*?)$/', $arg, $m)){
+                list(,$name, $value) = $m;
+            }
+            else {
+                $name = $arg;
+                $value = '';
+            }
+            switch ($name){
+                case '-h':
+                case '--help':
+                    xmi2php_usage();
+                    exit(0);
+                case '--strict':
+                    error_reporting(E_ALL | E_STRICT);
+                    break;
+                case '--test':
+                    $writer = new XmiWriter();
+                    $writer->enablePrivate($showPrivates);
+                    $writer->enableProtected($showProtecteds);
+                    $writer->addClass('XmiWriter');
+                    $writer->addClass('XmiInterfaceWriter');
+                    $writer->addClass('XmiClassWriter');
+                    $writer->write();
+                    exit(0);
+                case '--no-private':
+                    $showPrivates = false;
+                    break;
+                case '--no-protected':
+                    $showProtecteds = false;
+                    break;
+                case '--path':
+                    ini_set('include_path', $value.':'.ini_get('include_path'));
+                    break;
+                case '--recursive':
+                    $recusive = true;
+                    break;
+                case '--output':
+                    $outputFile = $value;
+                    break;
+                default:
+                    echo 'ERROR: unknown parameter ',$name,"\n";
+                    xmi2php_usage();
+                    exit(1);
+            }
+        }
+        else {
+            array_push($files, $arg);
+        }
+    }
+
+    if (count($files) == 0){
+        xmi2php_usage();
+        exit(0);
+    }
+    foreach ($files as $file){
+        if (is_dir($file)){
+            if ($recusive){
+                xmi2php_requireDirectory($file);
+            }
+            else {
+                echo 'ERROR: ',$file,' is a directory but --recursive not used',"\n";
+                xmi2php_usage();
+                exit(1);
+            }
+        }
+        else {
+            require_once $file;
+        }
+    }
+
+
+    $writer = new XmiWriter();
+    $writer->enablePrivate($showPrivates);
+    $writer->enableProtected($showProtecteds);
+    $allclasses = array_merge(get_declared_classes(), get_declared_interfaces());
+    $userclasses = array_diff($allclasses, $builtinClasses);
+    foreach ($userclasses as $className){
+        $writer->addClass($className);
+    }
+    $result = $writer->write();
+
+    if ($outputFile == ''){
+        echo $result;
+    }
+    else {
+        file_put_contents($outputFile, $result);
+    }
+}
+
+?>
