@@ -723,7 +723,7 @@ class XmiNameSpaceResolver
                 $classname = $this->classes[$context]['namespace'] . '\\' . $classname;
             }
         }
-        if ('\\' !== $classname[0]) $classname = substr($classname, 1);
+        if ('\\' === $classname[0]) $classname = substr($classname, 1);
         return $classname;
     }
 }
