@@ -103,6 +103,11 @@ class XmiWriter
         $this->_nsResolver = $nsr;
     }
 
+    public function getNSResolver()
+    {
+        return $this->_nsResolver;
+    }
+
     public function acceptPrivate()
     {
         return $this->_showPrivate;
@@ -494,7 +499,7 @@ class XmiClassWriter
             $type = 'mixed'; // damn it
         }
 
-        $type = $this->_writer->_nsResolver->getFullyQualifiedClassName($this->_class->name, $type);
+        $type = $this->_writer->getNSResolver()->getFullyQualifiedClassName($this->_class->name, $type);
         $id = $this->getTypeId($type);
         
 
@@ -521,7 +526,7 @@ class XmiClassWriter
         }
 
         $type = XmiWriter::extractReturnTypeFromComment($method->getDocComment());
-        $type = $this->_writer->_nsResolver->getFullyQualifiedClassName($this->_class->name, $type);
+        $type = $this->_writer->getNSResolver()->getFullyQualifiedClassName($this->_class->name, $type);
 
         $id = $this->getTypeId($type);
         $this->writeData('<UML:Operation visibility="',$this->getVisibility($method),'" xmi.id="',$this->nextXmiId(),'" type="',$id,'" name="',$method->getName(),'"');
@@ -556,7 +561,7 @@ class XmiClassWriter
         }
         else {
             $type = XmiWriter::extractParamTypeFromComment($method->getDocComment(), $param->getName());
-            $type = $this->_writer->_nsResolver->getFullyQualifiedClassName($this->_class->name, $type);
+            $type = $this->_writer->getNSResolver()->getFullyQualifiedClassName($this->_class->name, $type);
         }
         $id = $this->getTypeId($type);
         $this->writeData('<UML:Parameter visibility="public" xmi.id="',$this->nextXmiId(),'" value="',htmlspecialchars($default),'" type="',$id,'" name="',htmlspecialchars($param->getName()),'"/>', "\n");
