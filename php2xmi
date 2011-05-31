@@ -714,11 +714,16 @@ class XmiNameSpaceResolver
 
     public function getFullyQualifiedClassName($context, $classname)
     {
-        if (isset($this->classes[$context]['use'][$classname])) {
-            return $this->classes[$context]['use'][$classname];
-        } elseif (isset($this->classes[$context]['namespace'])) {
-            return $this->classes[$context]['namespace'] . '\\' . $classname;
+        if ('\\' !== $classname[0]) {
+            $explode = explode('\\', $classname, 2);
+            if (isset($this->classes[$context]['use'][$explode[0]])) {
+                $classname = $this->classes[$context]['use'][$explode[0]];
+                if (isset($explode[1])) $classname .= '\\' . $explode[1];
+            } elseif (isset($this->classes[$context]['namespace'])) {
+                $classname = $this->classes[$context]['namespace'] . '\\' . $classname;
+            }
         }
+        if ('\\' !== $classname[0]) $classname = substr($classname, 1);
         return $classname;
     }
 }
