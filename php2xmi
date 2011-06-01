@@ -564,6 +564,7 @@ class XmiClassWriter
             $type = $this->_writer->getNSResolver()->getFullyQualifiedClassName($this->_class->name, $type);
         }
         $id = $this->getTypeId($type);
+        if (is_array($default)) $default = 'array()';
         $this->writeData('<UML:Parameter visibility="public" xmi.id="',$this->nextXmiId(),'" value="',htmlspecialchars($default),'" type="',$id,'" name="',htmlspecialchars($param->getName()),'"/>', "\n");
     }
 
